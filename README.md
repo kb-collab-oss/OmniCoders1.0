@@ -1,2 +1,2 @@
 # OmniCoders1.0
-Projet Carnet de correspondance
+Projet DevOps : Application web responsive pour la numérisation du carnet de correspondance scolaire.
