@@ -1,4 +1,63 @@
+# ==========================================
+# SECRETS & ENVIRONNEMENT
+# ==========================================
+# Ignore tous les fichiers .env (.env.local, .env.docker...)
+.env*
+# Mais garde le fichier modèle pour les autres développeurs
+!.env.example
+credentials.json
+*.key
+*.pfx
+
+# ==========================================
+# NODE.JS & DÉPENDANCES
+# ==========================================
 node_modules/
-.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ==========================================
+# BUILD & COMPILATION
+# ==========================================
+dist/
+build/
+out/
+target/
+.next/
+.cache/
+
+# ==========================================
+# LOGS, TESTS & COUVERTURE
+# ==========================================
 *.log
 coverage/
+.nyc_output/
+
+# ==========================================
+# DOCKER & BASES DE DONNÉES LOCALES
+# ==========================================
+# Volumes Docker de la base
+postgres_data/
+pgdata/
+# data/   (à décommenter seulement si ce dossier contient des données locales)
+
+# Configuration Docker propre à la machine locale
+docker-compose.override.yml
+.docker/
+
+# ==========================================
+# SÉCURITÉ PROJET (données de mineurs)
+# ==========================================
+# Sauvegardes et exports de la base
+backups/
+*.dump
+
+# ==========================================
+# ÉDITEURS ET SYSTÈME
+# ==========================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
