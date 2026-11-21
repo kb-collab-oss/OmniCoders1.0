@@ -1,0 +1,1 @@
+-- Tables à créer ici, à partir du MCD validé par le groupe.
