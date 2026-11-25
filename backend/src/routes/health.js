@@ -5,7 +5,7 @@ router.get('/', async (req, res) => {
   try {
     await db.query('SELECT 1');
     res.json({ status: 'ok', database: 'up' });
-  } catch (err) {
+    } catch {
     res.status(503).json({ status: 'error', database: 'down' });
   }
 });
