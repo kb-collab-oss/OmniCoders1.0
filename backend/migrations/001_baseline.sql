@@ -1,0 +1,3 @@
+-- Migration 001 : point de départ.
+-- Le schéma initial est créé par database/init.sql (au premier démarrage de Docker).
+-- Les modifications futures de la base vont dans de nouveaux fichiers : 002_..., 003_...
