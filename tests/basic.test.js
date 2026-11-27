@@ -80,8 +80,103 @@ test("la base refuse deux comptes avec le meme email", async () => {
   expect(code).toBe("23505"); // violation d'unicite
 });
 
+// test (integrite referentielle)
+test("un élève avec un parent_id inexistant est refusé (clé étrangère)", async () => {
+  await expect(
+    pool.query(
+      `INSERT INTO eleve (nom, prenom, date_naissance, niveau, parent_id)
+       VALUES ('Test', 'Orphelin', '2016-05-10', 'CP', 999999)`
+    )
+  ).rejects.toThrow(/foreign key|23503/i);
+});
+
+//Test relation 1-N 
+test("un même parent peut avoir plusieurs élèves (relation 1-N)", async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    //  Creation d un utilisateur avec le role PARENT
+    const parentRes = await client.query(
+      `INSERT INTO utilisateur (email, mot_de_passe_hash, nom, prenom, role)
+       VALUES ('parent.multi@test.local', '$2b$10$abcdefghijklmnopqrstuv', 'Dupont', 'Jean', 'PARENT')
+       RETURNING id`
+    );
+    const parentId = parentRes.rows[0].id;
+
+    //  Insertion de deux eleves rattaches au meme parent_id
+    await client.query(
+      `INSERT INTO eleve (nom, prenom, date_naissance, niveau, parent_id)
+       VALUES
+         ('Dupont', 'Léo', '2016-03-12', 'CE1', $1),
+         ('Dupont', 'Emma', '2018-09-24', 'CP', $1)`,
+      [parentId]
+    );
+
+    // Verification que les 2 eleves sont bien lies a ce parent
+    const elevesRes = await client.query(
+      "SELECT id FROM eleve WHERE parent_id = $1",
+      [parentId]
+    );
+    expect(elevesRes.rows.length).toBe(2);
+
+    // Annulation pour laisser la base propre apres le test
+    await client.query("ROLLBACK");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}); 
+
+
+test("droit_acces, droit_justification, droit_signature et droit_messages valent true par défaut", async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const parentRes = await client.query(
+      `INSERT INTO utilisateur (email, mot_de_passe_hash, nom, prenom, role)
+       VALUES ('parent.droits@test.local', '$2b$10$abcdefghijklmnopqrstuv', 'Martin', 'Claire', 'PARENT')
+       RETURNING id`
+    );
+
+    const parentId = parentRes.rows[0].id;
+
+    const eleveRes = await client.query(
+      `INSERT INTO eleve (nom, prenom, date_naissance, niveau, parent_id)
+       VALUES ('Martin', 'Lucas', '2017-04-15', 'CP', $1)
+       RETURNING droit_acces, droit_justification, droit_signature, droit_messages`,
+      [parentId]
+    );
+
+    // Verification que les 4 valeurs par defaut valent true
+    expect(eleveRes.rows[0]).toEqual({
+      droit_acces: true,
+      droit_justification: true,
+      droit_signature: true,
+      droit_messages: true,
+    });
+
+    await client.query("ROLLBACK");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
+const fs = require("fs");
+const path = require("path");
+
 test("aucun mot de passe en clair dans le seed (hash bcrypt ou argon2)", async () => {
+  const seedPath = path.resolve(__dirname, "../database/seed.sql");
+  if (!fs.existsSync(seedPath)) return; 
+
   const res = await pool.query("SELECT mot_de_passe_hash FROM utilisateur");
+  expect(res.rows.length).toBeGreaterThan(0);
   for (const row of res.rows) {
     expect(row.mot_de_passe_hash).toMatch(/^\$(2[aby]|argon2)/);
   }

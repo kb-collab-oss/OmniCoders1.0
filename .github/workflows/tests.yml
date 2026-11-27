@@ -132,12 +132,13 @@ jobs:
           # curl echoue seulement si la connexion est refusee (toute reponse HTTP = serveur demarre)
           for i in $(seq 1 30); do curl -s -o /dev/null http://localhost:4000/ && exit 0; sleep 1; done
           echo "Le backend ne repond pas apres 30 s"; cat ../server.log; exit 1
+          
 
       - name: Lancer les tests (base + API)
         if: env.BACKEND_READY == 'true'
         working-directory: tests
         run: |
-          npm install
+          npm ci
           npm test
 
       - name: Lancer les tests de la base (backend pas encore la)
@@ -145,7 +146,7 @@ jobs:
         working-directory: tests
         run: |
           echo "::warning::Backend absent : seuls les tests de la base sont executes."
-          npm install
+          npm ci
           npx jest --runInBand --testPathIgnorePatterns 'api\.test\.js$'
 
       - name: Journal du serveur (en cas d'echec)
