@@ -31,18 +31,23 @@ Avant de lancer le projet ou les tests en local, installer :
 
 Les tests s'executent sur une base PostgreSQL nommee carnet_scolaire.
 Etape 1 : Creer la base de donnees
+
   psql -U postgres -c "CREATE DATABASE carnet_scolaire;"
 
 Etape 2 : Charger le schema initial (init.sql)
+
   psql -v ON_ERROR_STOP=1 -U postgres -d carnet_scolaire -f database/init.sql
 
 Etape 3 : Charger les donnees de test (seed.sql - optionnel)
+
   psql -v ON_ERROR_STOP=1 -U postgres -d carnet_scolaire -f database/seed.sql
 
 4. INSTALLATION DES DEPENDANCES DE TEST
 
 Place-toi dans le dossier tests et utilise npm ci afin d'installer exactement les versions definies dans package-lock.json :
+
   cd tests
+  
   npm ci
 
 5. LANCER LES TESTS EN LOCAL
@@ -50,19 +55,35 @@ Place-toi dans le dossier tests et utilise npm ci afin d'installer exactement le
 La suite de tests utilise la variable d'environnement DB_PASSWORD pour se connecter a PostgreSQL (par defaut sur localhost, port 5432, utilisateur postgres, base carnet_scolaire).
 
 A) Lancer tous les tests (Base de donnees + API, necessite le backend demarre) :
-Sous Linux / macOS : DB_PASSWORD=ton_mot_de_passe_postgres 
+Sous Linux / macOS : 
+
+ DB_PASSWORD=ton_mot_de_passe_postgres 
+ 
  npm test
-Sous Windows (PowerShell) : $env:DB_PASSWORD="ton_mot_de_passe_postgres"
+ 
+Sous Windows (PowerShell) : 
+
+ $env:DB_PASSWORD="ton_mot_de_passe_postgres"
+ 
  npm test
+ 
 Sous Windows (Invite de commandes cmd) :
+
  set DB_PASSWORD=ton_mot_de_passe_postgres
+ 
  npm test
 
 B) Lancer uniquement les tests de la base de donnees (Sprint 0 / Backend absent) :
+
 Sous Linux / macOS :
+
  DB_PASSWORD=ton_mot_de_passe_postgres npx jest --runInBand --testPathIgnorePatterns 'api\.test\.js$'
+
+ 
 Sous Windows (PowerShell) :
+
  $env:DB_PASSWORD="ton_mot_de_passe_postgres"
+ 
  npx jest --runInBand --testPathIgnorePatterns 'api\.test\.js$'
 
 
@@ -103,7 +124,10 @@ Sous Windows (PowerShell) :
   Verifie que la variable DB_PASSWORD correspond bien a ton mot de passe PostgreSQL local.
  
  - Erreur "database carnet_scolaire does not exist" :
-  Execute : psql -U postgres -c "CREATE DATABASE carnet_scolaire;" puis recharge database/init.sql.
+   
+  Execute : 
+  
+  psql -U postgres -c "CREATE DATABASE carnet_scolaire;" puis recharge database/init.sql.
 
  - Reinitialiser completement la base locale :
  
