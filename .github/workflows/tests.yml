@@ -1,0 +1,227 @@
+name: CI Sprint 0
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------
+  # Job 1 : structure du depot, secrets, configuration Docker Compose
+  # + detection de ce qui existe deja (backend, frontend)
+  # ---------------------------------------------------------------
+  structure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend_ready: ${{ steps.detect.outputs.backend_ready }}
+      frontend_ready: ${{ steps.detect.outputs.frontend_ready }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fichiers attendus presents
+        run: |
+          missing=0
+          for f in README.md .gitignore .env.example docker-compose.yml \
+                   backend/Dockerfile frontend/Dockerfile database/init.sql; do
+            if [ -f "$f" ]; then echo "OK      $f"; else echo "MANQUE  $f"; missing=1; fi
+          done
+          exit $missing
+
+      - name: Aucun fichier .env suivi par Git (secrets)
+        run: |
+          if git ls-files | grep -E '(^|/)\.env$'; then
+            echo "Un fichier .env est suivi par Git : retirez-le (git rm --cached) et changez les secrets."
+            exit 1
+          fi
+          git check-ignore -q .env || { echo ".gitignore n'exclut pas .env"; exit 1; }
+          echo "OK : aucun .env suivi, .env ignore"
+
+      - name: Configuration Docker Compose valide
+        env:
+          DB_PASSWORD: ci_password
+          JWT_SECRET: ci_jwt_secret
+        run: |
+          docker compose config -q
+          echo "Services declares :"
+          docker compose config --services
+
+      - name: Detecter backend et frontend
+        id: detect
+        run: |
+          if [ -f backend/package.json ] && [ -f backend/src/server.js ]; then
+            echo "backend_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "backend_ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Backend absent (backend/package.json ou backend/src/server.js) : tests API, lint, build et Docker ignores."
+          fi
+          if [ -f frontend/package.json ]; then
+            echo "frontend_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend_ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Frontend absent (frontend/package.json) : lint et build ignores."
+          fi
+
+  # ---------------------------------------------------------------
+  # Job 2 : base de donnees (toujours) + backend et API (si presents)
+  # ---------------------------------------------------------------
+  tests:
+    needs: structure
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ci_password   # jetable : valable uniquement dans ce job
+      DB_NAME: carnet_scolaire
+      JWT_SECRET: ci_jwt_secret  # jetable
+      PORT: 4000
+      BACKEND_READY: ${{ needs.structure.outputs.backend_ready }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20   # meme version que backend/Dockerfile
+
+      - name: Backend - installer, lint, build
+        if: env.BACKEND_READY == 'true'
+        working-directory: backend
+        run: |
+          npm ci
+          npm run lint --if-present
+          npm run build --if-present
+
+      - name: Demarrer PostgreSQL
+        run: |
+          sudo systemctl start postgresql.service
+          for i in $(seq 1 30); do pg_isready -h localhost -p 5432 && break; sleep 1; done
+          pg_isready -h localhost -p 5432
+
+      - name: Creer la base
+        run: |
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres PASSWORD '${DB_PASSWORD}';"
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${DB_NAME};"
+
+      
+      - name: Charger le schema, executer les migrations et charger les donnees fictives
+        env:
+          PGPASSWORD: ${{ env.DB_PASSWORD }}
+        run: |
+          psql -v ON_ERROR_STOP=1 -h localhost -U postgres -d "$DB_NAME" -f database/init.sql
+          if [ "$BACKEND_READY" = "true" ]; then
+            npm --prefix backend run migrate --if-present
+            npm --prefix backend run migrate --if-present
+          fi
+          if [ -f database/seed.sql ]; then
+            psql -v ON_ERROR_STOP=1 -h localhost -U postgres -d "$DB_NAME" -f database/seed.sql
+          else
+            echo "database/seed.sql absent : ignore"
+          fi
+      
+
+      - name: Demarrer le backend
+        if: env.BACKEND_READY == 'true'
+        working-directory: backend
+        run: |
+          nohup node src/server.js > ../server.log 2>&1 &
+          # curl echoue seulement si la connexion est refusee (toute reponse HTTP = serveur demarre)
+          for i in $(seq 1 30); do curl -s -o /dev/null http://localhost:4000/ && exit 0; sleep 1; done
+          echo "Le backend ne repond pas apres 30 s"; cat ../server.log; exit 1
+          
+
+      - name: Lancer les tests (base + API)
+        if: env.BACKEND_READY == 'true'
+        working-directory: tests
+        run: |
+          npm ci
+          npm test
+
+      - name: Lancer les tests de la base (backend pas encore la)
+        if: env.BACKEND_READY != 'true'
+        working-directory: tests
+        run: |
+          echo "::warning::Backend absent : seuls les tests de la base sont executes."
+          npm ci
+          npx jest --runInBand --testPathIgnorePatterns 'api\.test\.js$'
+
+      - name: Journal du serveur (en cas d'echec)
+        if: failure() && env.BACKEND_READY == 'true'
+        run: cat server.log || true
+
+  # ---------------------------------------------------------------
+  # Job 3 : frontend (installation, lint, tests, build) si present
+  # ---------------------------------------------------------------
+  frontend:
+    needs: structure
+    if: needs.structure.outputs.frontend_ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run lint --if-present
+      - run: npm test --if-present
+      - run: npm run build --if-present
+
+  # ---------------------------------------------------------------
+  # Job 4 : livrable du sprint 0 - "docker compose up lance l'app"
+  # (uniquement quand backend et frontend existent)
+  # ---------------------------------------------------------------
+  docker:
+    needs: structure
+    if: needs.structure.outputs.backend_ready == 'true' && needs.structure.outputs.frontend_ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparer le fichier .env
+        run: |
+          cp .env.example .env
+          sed -i 's/^DB_PASSWORD=.*/DB_PASSWORD=ci_password/' .env
+          sed -i 's/^JWT_SECRET=.*/JWT_SECRET=ci_jwt_secret/' .env
+
+      - name: Construire les images (backend, frontend)
+        run: docker compose build
+
+      - name: Demarrer toute la pile
+        run: docker compose up -d
+
+      - name: Attendre que le backend reponde sur /health
+        run: |
+          for i in $(seq 1 60); do
+            for url in http://localhost:4000/api/health http://localhost:4000/health; do
+              if curl -sf "$url"; then echo; echo "OK : $url"; exit 0; fi
+            done
+            sleep 2
+          done
+          docker compose ps
+          docker compose logs --tail=50
+          exit 1
+
+      - name: Etat des conteneurs
+        run: docker compose ps
+
+      - name: Verifier que le frontend repond
+        run: curl -sf -o /dev/null http://localhost:8080/
+
+      - name: Arreter la pile
+        if: always()
+        run: docker compose down -v
