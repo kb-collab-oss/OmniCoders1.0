@@ -113,16 +113,22 @@ jobs:
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres PASSWORD '${DB_PASSWORD}';"
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${DB_NAME};"
 
-      - name: Charger le schema et les donnees fictives
+      
+      - name: Charger le schema, executer les migrations et charger les donnees fictives
         env:
           PGPASSWORD: ${{ env.DB_PASSWORD }}
         run: |
           psql -v ON_ERROR_STOP=1 -h localhost -U postgres -d "$DB_NAME" -f database/init.sql
+          if [ "$BACKEND_READY" = "true" ]; then
+            npm --prefix backend run migrate --if-present
+            npm --prefix backend run migrate --if-present
+          fi
           if [ -f database/seed.sql ]; then
             psql -v ON_ERROR_STOP=1 -h localhost -U postgres -d "$DB_NAME" -f database/seed.sql
           else
             echo "database/seed.sql absent : ignore"
           fi
+      
 
       - name: Demarrer le backend
         if: env.BACKEND_READY == 'true'

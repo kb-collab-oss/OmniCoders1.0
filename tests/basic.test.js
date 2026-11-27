@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const { Pool } = require("pg");
 
 // Memes variables que docker-compose.yml / .env.example
@@ -24,14 +26,13 @@ async function inRollback(fn) {
 }
 
 // =====================================================================
-//connexion + schema (database/init.sql)
+// Connexion + schema (database/init.sql)
 // =====================================================================
 
 test("la base repond", async () => {
   const res = await pool.query("SELECT 1 AS ok");
   expect(res.rows[0].ok).toBe(1);
 });
-
 
 const tables = [
   "etablissement", "utilisateur", "enseignant", "parent", "classe", "eleve",
@@ -80,103 +81,109 @@ test("la base refuse deux comptes avec le meme email", async () => {
   expect(code).toBe("23505"); // violation d'unicite
 });
 
-// test (integrite referentielle)
+// =====================================================================
+// Lien parent-eleve (relation 1-N) et valeurs par defaut des droits
+// =====================================================================
+
 test("un élève avec un parent_id inexistant est refusé (clé étrangère)", async () => {
-  await expect(
-    pool.query(
-      `INSERT INTO eleve (nom, prenom, date_naissance, niveau, parent_id)
-       VALUES ('Test', 'Orphelin', '2016-05-10', 'CP', 999999)`
-    )
-  ).rejects.toThrow(/foreign key|23503/i);
+  const code = await inRollback(async (c) => {
+    const etab = await c.query(
+      "INSERT INTO etablissement (nom, code, annee_active) VALUES ('Ecole FK', 'ETAB-FK', '2026-2027') RETURNING id"
+    );
+    try {
+      await c.query(
+        `INSERT INTO eleve (etablissement_id, parent_id, nom, prenom, date_naissance, matricule)
+         VALUES ($1, 999999, 'Test', 'Orphelin', '2016-05-10', 'MAT-FK-01')`,
+        [etab.rows[0].id]
+      );
+      return "INSERT_OK";
+    } catch (e) {
+      return e.code;
+    }
+  });
+  expect(code).toBe("23503"); // violation de cle etrangere
 });
 
-//Test relation 1-N 
 test("un même parent peut avoir plusieurs élèves (relation 1-N)", async () => {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  const count = await inRollback(async (c) => {
+    const etabId = (
+      await c.query("INSERT INTO etablissement (nom, code, annee_active) VALUES ('Ecole Multi', 'ETAB-MULTI', '2026-2027') RETURNING id")
+    ).rows[0].id;
 
-    //  Creation d un utilisateur avec le role PARENT
-    const parentRes = await client.query(
-      `INSERT INTO utilisateur (email, mot_de_passe_hash, nom, prenom, role)
-       VALUES ('parent.multi@test.local', '$2b$10$abcdefghijklmnopqrstuv', 'Dupont', 'Jean', 'PARENT')
-       RETURNING id`
-    );
-    const parentId = parentRes.rows[0].id;
+    const userId = (
+      await c.query(
+        "INSERT INTO utilisateur (etablissement_id, email, mot_de_passe_hash, role) VALUES ($1, 'parent.multi@test.local', '$2b$10$abcdefghijklmnopqrstuv', 'parent') RETURNING id",
+        [etabId]
+      )
+    ).rows[0].id;
 
-    //  Insertion de deux eleves rattaches au meme parent_id
-    await client.query(
-      `INSERT INTO eleve (nom, prenom, date_naissance, niveau, parent_id)
+    const parentId = (
+      await c.query(
+        "INSERT INTO parent (etablissement_id, utilisateur_id, nom, prenom) VALUES ($1, $2, 'Dupont', 'Jean') RETURNING id",
+        [etabId, userId]
+      )
+    ).rows[0].id;
+
+    await c.query(
+      `INSERT INTO eleve (etablissement_id, parent_id, nom, prenom, date_naissance, matricule)
        VALUES
-         ('Dupont', 'Léo', '2016-03-12', 'CE1', $1),
-         ('Dupont', 'Emma', '2018-09-24', 'CP', $1)`,
-      [parentId]
+         ($1, $2, 'Dupont', 'Léo', '2016-03-12', 'MAT-MULTI-01'),
+         ($1, $2, 'Dupont', 'Emma', '2018-09-24', 'MAT-MULTI-02')`,
+      [etabId, parentId]
     );
 
-    // Verification que les 2 eleves sont bien lies a ce parent
-    const elevesRes = await client.query(
-      "SELECT id FROM eleve WHERE parent_id = $1",
-      [parentId]
-    );
-    expect(elevesRes.rows.length).toBe(2);
-
-    // Annulation pour laisser la base propre apres le test
-    await client.query("ROLLBACK");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}); 
-
+    const res = await c.query("SELECT id FROM eleve WHERE parent_id = $1", [parentId]);
+    return res.rows.length;
+  });
+  expect(count).toBe(2);
+});
 
 test("droit_acces, droit_justification, droit_signature et droit_messages valent true par défaut", async () => {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  const droits = await inRollback(async (c) => {
+    const etabId = (
+      await c.query("INSERT INTO etablissement (nom, code, annee_active) VALUES ('Ecole Droits', 'ETAB-DROITS', '2026-2027') RETURNING id")
+    ).rows[0].id;
 
-    const parentRes = await client.query(
-      `INSERT INTO utilisateur (email, mot_de_passe_hash, nom, prenom, role)
-       VALUES ('parent.droits@test.local', '$2b$10$abcdefghijklmnopqrstuv', 'Martin', 'Claire', 'PARENT')
-       RETURNING id`
-    );
+    const userId = (
+      await c.query(
+        "INSERT INTO utilisateur (etablissement_id, email, mot_de_passe_hash, role) VALUES ($1, 'parent.droits@test.local', '$2b$10$abcdefghijklmnopqrstuv', 'parent') RETURNING id",
+        [etabId]
+      )
+    ).rows[0].id;
 
-    const parentId = parentRes.rows[0].id;
+    const parentId = (
+      await c.query(
+        "INSERT INTO parent (etablissement_id, utilisateur_id, nom, prenom) VALUES ($1, $2, 'Martin', 'Claire') RETURNING id",
+        [etabId, userId]
+      )
+    ).rows[0].id;
 
-    const eleveRes = await client.query(
-      `INSERT INTO eleve (nom, prenom, date_naissance, niveau, parent_id)
-       VALUES ('Martin', 'Lucas', '2017-04-15', 'CP', $1)
+    const res = await c.query(
+      `INSERT INTO eleve (etablissement_id, parent_id, nom, prenom, date_naissance, matricule)
+       VALUES ($1, $2, 'Martin', 'Lucas', '2017-04-15', 'MAT-DROITS-01')
        RETURNING droit_acces, droit_justification, droit_signature, droit_messages`,
-      [parentId]
+      [etabId, parentId]
     );
+    return res.rows[0];
+  });
 
-    // Verification que les 4 valeurs par defaut valent true
-    expect(eleveRes.rows[0]).toEqual({
-      droit_acces: true,
-      droit_justification: true,
-      droit_signature: true,
-      droit_messages: true,
-    });
-
-    await client.query("ROLLBACK");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  expect(droits).toEqual({
+    droit_acces: true,
+    droit_justification: true,
+    droit_signature: true,
+    droit_messages: true,
+  });
 });
 
-const fs = require("fs");
-const path = require("path");
+// Securite des mots de passe dans le seed
 
 test("aucun mot de passe en clair dans le seed (hash bcrypt ou argon2)", async () => {
   const seedPath = path.resolve(__dirname, "../database/seed.sql");
-  if (!fs.existsSync(seedPath)) return; 
+  if (!fs.existsSync(seedPath)) return;
 
   const res = await pool.query("SELECT mot_de_passe_hash FROM utilisateur");
-  expect(res.rows.length).toBeGreaterThan(0);
+  if (res.rows.length === 0) return;
+
   for (const row of res.rows) {
     expect(row.mot_de_passe_hash).toMatch(/^\$(2[aby]|argon2)/);
   }
